@@ -250,32 +250,39 @@ async function loadModel() {
         const allPaths = localPaths.concat(MODEL_CDN_URLS);
 
         let loaded = false;
+        let lastError = '';
         for (const path of allPaths) {
             try {
                 loadingText.textContent = `加载模型: ${path.split('/').pop()} ...`;
-                // 先 fetch 下载为 ArrayBuffer，再交给 ORT 解析
-                // 这样可以绕过 ORT 内部 fetch 的 CORS 限制
-                const resp = await fetch(path, { mode: 'cors' });
+                console.log('Trying model path:', path);
+
+                // 用 fetch 下载为 ArrayBuffer，再转 Uint8Array 交给 ORT
+                const resp = await fetch(path);
                 if (!resp.ok) {
+                    lastError = `HTTP ${resp.status}`;
                     console.log('HTTP', resp.status, path);
                     continue;
                 }
                 const buf = await resp.arrayBuffer();
-                session = await ort.InferenceSession.create(buf, {
-                    executionProviders: ['webgl', 'wasm'],
+                console.log('Downloaded', buf.byteLength, 'bytes from', path);
+
+                // 用 Uint8Array 传给 ORT（比 ArrayBuffer 兼容性更好）
+                const modelData = new Uint8Array(buf);
+                session = await ort.InferenceSession.create(modelData, {
+                    executionProviders: ['wasm', 'webgl'],
                     graphOptimizationLevel: 'all',
-                    enableMemPattern: true,
                 });
-                console.log('Model loaded:', path);
+                console.log('Model loaded successfully:', path);
                 loaded = true;
                 break;
             } catch (e) {
-                console.log('Not found / error:', path, e.message);
+                lastError = e.message;
+                console.log('Model load error:', path, e.message);
             }
         }
 
         if (!loaded) {
-            throw new Error('未找到模型。请部署到静态托管（GitHub Pages 等）或同目录放置 .onnx 文件');
+            throw new Error('模型加载失败: ' + lastError);
         }
 
         overlay.style.display = 'none';
