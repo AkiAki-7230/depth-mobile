@@ -242,21 +242,26 @@ async function loadModel() {
     const loadingText = document.getElementById('loading-text');
 
     try {
-        // 优先尝试本地相对路径（同目录下的 .onnx 文件）
+        // 所有候选地址（本地 + CDN）
         const localPaths = [
             'depth_anything_v2_vits_mobile_int8.onnx',
             'depth_anything_v2_vits_mobile.onnx',
-            'depth_anything_v2_vits_int8.onnx',
-            'depth_anything_v2_vits.onnx'
         ];
-        // 本地全部失败后，回退到 CDN（部署时填入）
         const allPaths = localPaths.concat(MODEL_CDN_URLS);
 
         let loaded = false;
         for (const path of allPaths) {
             try {
-                loadingText.textContent = `加载模型: ${path.split('/').pop()}`;
-                session = await ort.InferenceSession.create(path, {
+                loadingText.textContent = `加载模型: ${path.split('/').pop()} ...`;
+                // 先 fetch 下载为 ArrayBuffer，再交给 ORT 解析
+                // 这样可以绕过 ORT 内部 fetch 的 CORS 限制
+                const resp = await fetch(path, { mode: 'cors' });
+                if (!resp.ok) {
+                    console.log('HTTP', resp.status, path);
+                    continue;
+                }
+                const buf = await resp.arrayBuffer();
+                session = await ort.InferenceSession.create(buf, {
                     executionProviders: ['webgl', 'wasm'],
                     graphOptimizationLevel: 'all',
                     enableMemPattern: true,
