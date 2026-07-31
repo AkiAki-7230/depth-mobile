@@ -1,0 +1,24 @@
+{
+    "name": "Depth Anything V2 Mobile",
+    "short_name": "Depth V2",
+    "description": "单目深度估计 - 等高线实时可视化（纯手机端推理）",
+    "start_url": "./mobile_standalone.html",
+    "display": "standalone",
+    "orientation": "portrait",
+    "background_color": "#111111",
+    "theme_color": "#111111",
+    "icons": [
+        {
+            "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Crect width='192' height='192' fill='%23111'/%3E%3Ctext x='96' y='110' font-size='100' text-anchor='middle' fill='%234CAF50'%3ED%3C/text%3E%3C/svg%3E",
+            "sizes": "192x192",
+            "type": "image/svg+xml",
+            "purpose": "any maskable"
+        },
+        {
+            "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' fill='%23111'/%3E%3Ctext x='256' y='290' font-size='260' text-anchor='middle' fill='%234CAF50'%3ED%3C/text%3E%3C/svg%3E",
+            "sizes": "512x512",
+            "type": "image/svg+xml",
+            "purpose": "any maskable"
+        }
+    ]
+}

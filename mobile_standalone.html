@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#111111">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Depth V2">
+    <link rel="manifest" href="manifest.json">
+    <title>Depth Anything V2 - Mobile</title>
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/ort.min.js"></script>
+    <script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCVReady()"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, sans-serif;
+            background: #111; color: #eee;
+            min-height: 100vh; overscroll-behavior: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .container { max-width: 600px; margin: 0 auto; padding: 12px; }
+        h1 { text-align: center; margin: 8px 0; font-size: 1.2rem; }
+
+        /* 加载层 */
+        #loading-overlay {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.92);
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center; z-index: 999;
+        }
+        .spinner {
+            width: 48px; height: 48px;
+            border: 4px solid #333; border-top: 4px solid #4CAF50;
+            border-radius: 50%; animation: spin 1s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        #loading-text { margin-top: 16px; font-size: 0.85rem; color: #888; max-width: 80%; text-align: center; }
+
+        /* Tab */
+        .tabs { display: flex; margin: 8px 0; gap: 4px; }
+        .tab-btn {
+            flex: 1; padding: 10px; border: none; border-radius: 8px 8px 0 0;
+            background: #222; color: #888; font-size: 0.9rem; cursor: pointer;
+        }
+        .tab-btn.active { background: #333; color: #fff; }
+
+        /* 画布区域 */
+        .canvas-box { width: 100%; position: relative; border-radius: 8px; overflow: hidden; background: #000; }
+        canvas { width: 100%; display: block; }
+        #video { display: none; }
+        .upload-area {
+            width: 100%; min-height: 200px; border: 2px dashed #444;
+            border-radius: 8px; display: flex; align-items: center; justify-content: center;
+            color: #666; font-size: 0.9rem; cursor: pointer; background: #1a1a1a;
+            flex-direction: column;
+        }
+        .upload-area:active { border-color: #4CAF50; color: #4CAF50; }
+        #file-input { display: none; }
+
+        /* 控制面板 */
+        .controls { margin: 12px 0; }
+        .slider-group {
+            display: flex; align-items: center; gap: 10px;
+            margin: 6px 0; font-size: 0.8rem;
+        }
+        .slider-group label { min-width: 90px; text-align: right; color: #aaa; }
+        .slider-group input[type="range"] { flex: 1; min-width: 0; accent-color: #4CAF50; }
+        .slider-group .val { min-width: 36px; text-align: center; color: #4CAF50; font-family: monospace; }
+
+        .btn {
+            padding: 10px 24px; font-size: 0.9rem; border: none;
+            border-radius: 8px; cursor: pointer; margin: 4px;
+        }
+        .btn-start { background: #4CAF50; color: #fff; }
+        .btn-stop { background: #f44336; color: #fff; }
+        .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+        .status { text-align: center; color: #888; margin: 6px 0; font-size: 0.75rem; min-height: 1em; }
+        .fps {
+            position: fixed; top: 8px; right: 8px;
+            background: rgba(0,0,0,0.7); padding: 4px 8px;
+            border-radius: 4px; font-size: 0.75rem; z-index: 100;
+        }
+    </style>
+</head>
+<body>
+    <div class="fps" id="fps">FPS: --</div>
+
+    <!-- 模型加载层 -->
+    <div id="loading-overlay">
+        <div class="spinner"></div>
+        <div id="loading-text">正在加载 OpenCV.js...</div>
+    </div>
+
+    <div class="container">
+        <h1>Depth Anything V2</h1>
+
+        <!-- Tab 切换 -->
+        <div class="tabs">
+            <button class="tab-btn active" id="tab-camera" onclick="switchTab('camera')">摄像头</button>
+            <button class="tab-btn" id="tab-upload" onclick="switchTab('upload')">上传图片</button>
+        </div>
+
+        <!-- 摄像头模式 -->
+        <div id="panel-camera" class="panel">
+            <div class="canvas-box">
+                <video id="video" autoplay playsinline muted></video>
+                <canvas id="canvas-camera"></canvas>
+            </div>
+            <div style="text-align:center; margin:8px 0;">
+                <button class="btn btn-start" id="startBtn" onclick="startCamera()">启动摄像头</button>
+                <button class="btn btn-stop" id="stopBtn" onclick="stopCamera()" disabled>停止</button>
+            </div>
+        </div>
+
+        <!-- 上传模式 -->
+        <div id="panel-upload" class="panel" style="display:none;">
+            <div class="upload-area" id="uploadArea" onclick="document.getElementById('file-input').click()">
+                <div>点击选择图片</div>
+                <div style="font-size:0.75rem;color:#555;margin-top:4px;">（效果与电脑版一致：等高线叠加原图 + 距离标签）</div>
+            </div>
+            <input type="file" id="file-input" accept="image/*">
+            <div class="canvas-box" id="upload-result" style="display:none; margin-top:8px;">
+                <canvas id="canvas-upload"></canvas>
+            </div>
+        </div>
+
+        <!-- 控制面板（对齐 realtime_server.py 前端参数） -->
+        <div class="controls">
+            <div class="slider-group">
+                <label>等高线数量</label>
+                <input type="range" id="numContours" min="5" max="30" value="8" step="1"
+                       oninput="document.getElementById('contourVal').textContent=this.value">
+                <span class="val" id="contourVal">8</span>
+            </div>
+            <div class="slider-group">
+                <label>文字大小</label>
+                <input type="range" id="textScale" min="20" max="80" value="40" step="1"
+                       oninput="document.getElementById('scaleVal').textContent=(+this.value/100).toFixed(2)">
+                <span class="val" id="scaleVal">0.40</span>
+            </div>
+            <div class="slider-group">
+                <label>线条/文字透明度</label>
+                <input type="range" id="textAlpha" min="50" max="255" value="220" step="1"
+                       oninput="document.getElementById('alphaVal').textContent=this.value">
+                <span class="val" id="alphaVal">220</span>
+            </div>
+        </div>
+
+        <div class="status" id="status">加载中...</div>
+    </div>
+
+    <!-- PWA 安装提示 -->
+    <div id="install-banner" style="display:none; position:fixed; bottom:0; left:0; right:0;
+         background:#1a1a1a; padding:12px 16px; border-top:1px solid #333; z-index:200;
+         display:flex; align-items:center; gap:10px;">
+        <span style="flex:1; font-size:0.8rem; color:#ccc;">安装到主屏幕，离线使用</span>
+        <button class="btn btn-start" id="installBtn" style="margin:0;">安装</button>
+        <button class="btn" id="dismissBtn" style="margin:0; background:#333; color:#888;">稍后</button>
+    </div>
+
+<script>
+// ===================== 全局配置 =====================
+const INPUT_SIZE = 252;          // 18 * 14，与 ONNX 导出一致
+const MEAN = [0.485, 0.456, 0.406];
+const STD  = [0.229, 0.224, 0.225];
+
+// 模型 CDN 回退地址（部署到 GitHub Pages / Hugging Face 后填入）
+// 优先尝试本地相对路径，全部失败后尝试 CDN
+const MODEL_CDN_URLS = [
+    // ===== 在此处填入你的 CDN 地址 =====
+    // 'https://your-username.github.io/depth-models/depth_anything_v2_vits_mobile_int8.onnx',
+    // 'https://huggingface.co/your-username/depth-models/resolve/main/depth_anything_v2_vits_mobile_int8.onnx',
+];
+
+let session = null;
+let cvReady = false;
+let streaming = false;
+let mediaStream = null;
+let processing = false;
+let lastFrameTime = 0;
+let frameCount = 0;
+let currentTab = 'camera';
+let deferredPrompt = null;
+
+// ===================== PWA Service Worker 注册 =====================
+if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js').then(
+            (reg) => console.log('SW registered:', reg.scope),
+            (err) => console.log('SW registration failed:', err)
+        );
+    });
+}
+
+// ===================== PWA 安装提示 =====================
+window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredPrompt = e;
+    document.getElementById('install-banner').style.display = 'flex';
+});
+document.getElementById('installBtn').addEventListener('click', async () => {
+    if (deferredPrompt) {
+        deferredPrompt.prompt();
+        const { outcome } = await deferredPrompt.userChoice;
+        deferredPrompt = null;
+    }
+    document.getElementById('install-banner').style.display = 'none';
+});
+document.getElementById('dismissBtn').addEventListener('click', () => {
+    document.getElementById('install-banner').style.display = 'none';
+});
+
+// ===================== OpenCV.js 就绪回调 =====================
+function onOpenCVReady() {
+    if (typeof cv !== 'undefined') {
+        cvReady = true;
+        if (cv.Mat && cv.imread) {
+            document.getElementById('loading-text').textContent = 'OpenCV.js 加载完成，正在加载 ONNX 模型...';
+            loadModel();
+        } else {
+            // opencv.js 可能已加载但 WASM 未编译完，等待
+            const t = setInterval(() => {
+                if (cv.getBuildInformation) {
+                    clearInterval(t);
+                    document.getElementById('loading-text').textContent = 'OpenCV.js 编译完成，正在加载 ONNX 模型...';
+                    loadModel();
+                }
+            }, 200);
+        }
+    }
+}
+// 兜底：如果 onload 没触发（async），轮询
+if (typeof cv !== 'undefined') onOpenCVReady();
+setTimeout(() => { if (!cvReady && typeof cv !== 'undefined') onOpenCVReady(); }, 500);
+
+// ===================== ONNX 模型加载 =====================
+async function loadModel() {
+    const statusEl = document.getElementById('status');
+    const overlay = document.getElementById('loading-overlay');
+    const loadingText = document.getElementById('loading-text');
+
+    try {
+        // 优先尝试本地相对路径（同目录下的 .onnx 文件）
+        const localPaths = [
+            'depth_anything_v2_vits_mobile_int8.onnx',
+            'depth_anything_v2_vits_mobile.onnx',
+            'depth_anything_v2_vits_int8.onnx',
+            'depth_anything_v2_vits.onnx'
+        ];
+        // 本地全部失败后，回退到 CDN（部署时填入）
+        const allPaths = localPaths.concat(MODEL_CDN_URLS);
+
+        let loaded = false;
+        for (const path of allPaths) {
+            try {
+                loadingText.textContent = `加载模型: ${path.split('/').pop()}`;
+                session = await ort.InferenceSession.create(path, {
+                    executionProviders: ['webgl', 'wasm'],
+                    graphOptimizationLevel: 'all',
+                    enableMemPattern: true,
+                });
+                console.log('Model loaded:', path);
+                loaded = true;
+                break;
+            } catch (e) {
+                console.log('Not found / error:', path, e.message);
+            }
+        }
+
+        if (!loaded) {
+            throw new Error('未找到模型。请部署到静态托管（GitHub Pages 等）或同目录放置 .onnx 文件');
+        }
+
+        overlay.style.display = 'none';
+        statusEl.textContent = '就绪（等高线叠加原图 + 距离数值标签，与电脑版效果一致）';
+    } catch (err) {
+        loadingText.textContent = '加载失败: ' + err.message;
+        statusEl.textContent = '错误: ' + err.message;
+    }
+}
+
+// ===================== 预处理：ImageData → ONNX 输入张量 =====================
+function preprocessImageData(imageData) {
+    const w = INPUT_SIZE;
+    const h = INPUT_SIZE;
+    const data = imageData.data;
+    const planeSize = w * h;
+    const tensorData = new Float32Array(3 * planeSize);
+    for (let i = 0; i < planeSize; i++) {
+        const r = data[i * 4] / 255.0;
+        const g = data[i * 4 + 1] / 255.0;
+        const b = data[i * 4 + 2] / 255.0;
+        tensorData[i]             = (r - MEAN[0]) / STD[0];
+        tensorData[planeSize + i] = (g - MEAN[1]) / STD[1];
+        tensorData[planeSize * 2 + i] = (b - MEAN[2]) / STD[2];
+    }
+    return new ort.Tensor('float32', tensorData, [1, 3, h, w]);
+}
+
+// 将任意源（video/canvas/Image）缩放到 INPUT_SIZE 并获取 ImageData
+function getResizedImageData(source) {
+    const tmpCanvas = document.createElement('canvas');
+    tmpCanvas.width = INPUT_SIZE;
+    tmpCanvas.height = INPUT_SIZE;
+    const ctx = tmpCanvas.getContext('2d');
+    // 保持等比缩放，裁剪到中心正方形（避免变形影响深度）
+    const sw = source.videoWidth || source.width;
+    const sh = source.videoHeight || source.height;
+    if (sw === sh) {
+        ctx.drawImage(source, 0, 0, INPUT_SIZE, INPUT_SIZE);
+    } else {
+        const side = Math.min(sw, sh);
+        const sx = (sw - side) / 2;
+        const sy = (sh - side) / 2;
+        ctx.drawImage(source, sx, sy, side, side, 0, 0, INPUT_SIZE, INPUT_SIZE);
+    }
+    return ctx.getImageData(0, 0, INPUT_SIZE, INPUT_SIZE);
+}
+
+// ===================== 推理 =====================
+async function inferDepth(resizedImgData) {
+    const inputTensor = preprocessImageData(resizedImgData);
+    const feeds = {};
+    feeds[session.inputNames[0]] = inputTensor;
+    const results = await session.run(feeds);
+    const depthTensor = results[session.outputNames[0]];
+    // shape [1, 252, 252]
+    return new Float32Array(depthTensor.data);
+}
+
+// ===================== 等高线叠加（1:1 复刻 realtime_server.py generate_contours_overlay）
+// 参数:
+//   sourceCanvas: 原图 canvas（INPUT_SIZE x INPUT_SIZE，正方形）
+//   depthFloat32: Float32Array [INPUT_SIZE*INPUT_SIZE]
+//   numContours, textScale, textAlpha
+// 返回: cv.Mat（BGR，INPUT_SIZE x INPUT_SIZE），用完请调用 deleteMat
+function generateContoursOverlayCV(sourceCanvas, depthFloat32, numContours, textScale, textAlpha) {
+    const w = INPUT_SIZE, h = INPUT_SIZE;
+
+    // 1. 原图 BGR Mat（来自 canvas）
+    const srcMat = cv.imread(sourceCanvas);   // BGR uint8
+
+    // 2. depth_float → 归一化 uint8（对应 cv2.normalize MINMAX 0-255 CV_8U）
+    const depthU8 = new Uint8Array(w * h);
+    let minV = Infinity, maxV = -Infinity;
+    for (let i = 0; i < depthFloat32.length; i++) {
+        if (depthFloat32[i] < minV) minV = depthFloat32[i];
+        if (depthFloat32[i] > maxV) maxV = depthFloat32[i];
+    }
+    const range = maxV - minV + 1e-8;
+    for (let i = 0; i < w * h; i++) {
+        const v = (depthFloat32[i] - minV) / range * 255;
+        depthU8[i] = v < 0 ? 0 : (v > 255 ? 255 : v|0);
+    }
+    const depthNormMat = cv.matFromArray(h, w, cv.CV_8UC1, depthU8);
+    // 保留原始深度 Float32 拷贝，用于取 (cx,cy) 的 raw_dist
+    const depthRaw = new Float32Array(depthFloat32);
+
+    // 3. applyColorMap INFERNO
+    const depthColorMat = new cv.Mat();
+    cv.applyColorMap(depthNormMat, depthColorMat, cv.COLORMAP_INFERNO);
+
+    // 4. 分层 threshold → Canny → findContours → moments
+    const allEdges = new cv.Mat.zeros(h, w, cv.CV_8UC1);
+    const binary = new cv.Mat();
+    const edge = new cv.Mat();
+    const contours = new cv.MatVector();
+    const hierarchy = new cv.Mat();
+    const contourInfos = [];   // {cx, cy, raw_dist}
+
+    const levels = new Uint8Array(numContours);
+    for (let i = 0; i < numContours; i++) {
+        levels[i] = Math.round((i + 1) * 255 / numContours);
+    }
+
+    for (let i = 0; i < numContours; i++) {
+        const lev = levels[i];
+        // THRESH_BINARY: src > lev → 255
+        cv.threshold(depthNormMat, binary, lev, 255, cv.THRESH_BINARY);
+        cv.Canny(binary, edge, 30, 120);
+        // allEdges |= edge
+        cv.bitwise_or(allEdges, edge, allEdges);
+        // findContours
+        cv.findContours(edge, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+        if (contours.size() === 0) continue;
+        // 取最大面积轮廓
+        let maxIdx = 0, maxArea = -1;
+        for (let c = 0; c < contours.size(); c++) {
+            const area = cv.contourArea(contours.get(c));
+            if (area > maxArea) { maxArea = area; maxIdx = c; }
+        }
+        if (maxArea <= 0) continue;
+        const maxCnt = contours.get(maxIdx);
+        const M = cv.moments(maxCnt);
+        if (M.m00 === 0) { maxCnt.delete(); continue; }
+        const cx = Math.round(M.m10 / M.m00);
+        const cy = Math.round(M.m01 / M.m00);
+        if (cx >= 0 && cx < w && cy >= 0 && cy < h) {
+            const rawDist = depthRaw[cy * w + cx];
+            contourInfos.push({ cx, cy, rawDist });
+        }
+        maxCnt.delete();
+    }
+
+    // 5. dilate 加粗：kernel 2x2 ones，iterations=2
+    const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(2, 2));
+    cv.dilate(allEdges, allEdges, kernel, new cv.Point(-1, -1), 2);
+    kernel.delete();
+
+    // 6. 构建 overlay_rgba（uint8 4通道），线条颜色来自 depth_color[mask]
+    const overlay = new cv.Mat(h, w, cv.CV_8UC4, new cv.Scalar(0, 0, 0, 0));
+    const edgeData = allEdges.data;
+    const colorData = depthColorMat.data;
+    const overData = overlay.data;
+    for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+            const i = y * w + x;
+            if (edgeData[i] > 0) {
+                const ci = i * 3;
+                const oi = i * 4;
+                overData[oi]     = colorData[ci];     // B
+                overData[oi + 1] = colorData[ci + 1]; // G
+                overData[oi + 2] = colorData[ci + 2]; // R
+                overData[oi + 3] = textAlpha;         // A
+            }
+        }
+    }
+
+    // 7. 绘制距离数值标签（黑描边+白字）
+    const colorWhite = new cv.Scalar(255, 255, 255, 255);
+    const colorBlack = new cv.Scalar(0, 0, 0, 255);
+    for (const info of contourInfos) {
+        const txt = info.rawDist.toFixed(2);
+        const p = new cv.Point(info.cx, info.cy);
+        // 黑描边 thickness=3
+        cv.putText(overlay, txt, p, cv.FONT_HERSHEY_SIMPLEX, textScale, colorBlack, 3, cv.LINE_AA);
+        // 白字 thickness=1
+        cv.putText(overlay, txt, p, cv.FONT_HERSHEY_SIMPLEX, textScale, colorWhite, 1, cv.LINE_AA);
+    }
+
+    // 8. 原图 BGRA + addWeighted（alpha 1.0 vs 1.0）
+    const srcBgra = new cv.Mat();
+    cv.cvtColor(srcMat, srcBgra, cv.COLOR_BGR2BGRA);
+    const result = new cv.Mat();
+    // addWeighted(srcBgra, 1.0, overlay, 1.0, 0)
+    cv.addWeighted(srcBgra, 1.0, overlay, 1.0, 0.0, result, -1);
+    const resultBgr = new cv.Mat();
+    cv.cvtColor(result, resultBgr, cv.COLOR_BGRA2BGR);
+
+    // 9. 临时 Mat 回收（避免内存泄漏，实时模式很关键）
+    srcMat.delete();
+    depthNormMat.delete();
+    depthColorMat.delete();
+    allEdges.delete();
+    binary.delete();
+    edge.delete();
+    contours.delete();
+    hierarchy.delete();
+    overlay.delete();
+    srcBgra.delete();
+    result.delete();
+
+    return resultBgr;
+}
+
+// 释放 cv.Mat 的小工具
+function deleteMat(m) {
+    try { m.delete(); } catch(_) {}
+}
+
+// ===================== 渲染：cv.Mat(BGR) → 目标 canvas =====================
+function renderCVMat(mat, canvas, targetW, targetH) {
+    // 先画到临时 canvas
+    const tmp = document.createElement('canvas');
+    tmp.width = mat.cols;
+    tmp.height = mat.rows;
+    cv.imshow(tmp, mat);
+    canvas.width = targetW;
+    canvas.height = targetH;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(tmp, 0, 0, targetW, targetH);
+}
+
+// 获取当前 UI 参数
+function getUIRenderParams() {
+    return {
+        numContours: parseInt(document.getElementById('numContours').value, 10),
+        textScale: parseInt(document.getElementById('textScale').value, 10) / 100,
+        textAlpha: parseInt(document.getElementById('textAlpha').value, 10),
+    };
+}
+
+// ===================== 摄像头流程 =====================
+async function startCamera() {
+    if (!window.isSecureContext) {
+        document.getElementById('status').textContent = '错误：需要 HTTPS 才能调用摄像头';
+        return;
+    }
+    if (!cvReady || !session) {
+        document.getElementById('status').textContent = '模型/OpenCV 尚未加载完成，请稍候';
+        return;
+    }
+    try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 640 } },
+            audio: false
+        });
+        const video = document.getElementById('video');
+        video.srcObject = mediaStream;
+        await video.play();
+        streaming = true;
+        document.getElementById('startBtn').disabled = true;
+        document.getElementById('stopBtn').disabled = false;
+        document.getElementById('status').textContent = '摄像头已启动，实时深度等高线叠加中...';
+        processCameraLoop();
+    } catch (err) {
+        document.getElementById('status').textContent = '摄像头错误: ' + err.message;
+    }
+}
+
+function stopCamera() {
+    streaming = false;
+    if (mediaStream) {
+        mediaStream.getTracks().forEach(t => t.stop());
+        mediaStream = null;
+    }
+    document.getElementById('startBtn').disabled = false;
+    document.getElementById('stopBtn').disabled = true;
+    document.getElementById('status').textContent = '摄像头已停止';
+}
+
+// 正方形裁剪工具（canvas 版本）
+function cropSquareToCanvas(source) {
+    const sw = source.videoWidth || source.width;
+    const sh = source.videoHeight || source.height;
+    const side = Math.min(sw, sh);
+    const sx = (sw - side) / 2;
+    const sy = (sh - side) / 2;
+    const c = document.createElement('canvas');
+    c.width = INPUT_SIZE;
+    c.height = INPUT_SIZE;
+    c.getContext('2d').drawImage(source, sx, sy, side, side, 0, 0, INPUT_SIZE, INPUT_SIZE);
+    return { canvas: c, origSize: side };
+}
+
+async function processCameraLoop() {
+    if (!streaming) return;
+
+    // FPS 统计
+    const now = performance.now();
+    frameCount++;
+    if (now - lastFrameTime >= 1000) {
+        document.getElementById('fps').textContent = 'FPS: ' + frameCount;
+        frameCount = 0;
+        lastFrameTime = now;
+    }
+
+    if (processing) {
+        requestAnimationFrame(processCameraLoop);
+        return;
+    }
+
+    processing = true;
+    try {
+        const video = document.getElementById('video');
+        if (video.videoWidth > 0) {
+            const targetCanvas = document.getElementById('canvas-camera');
+            // 1. 取正方形裁剪（避免深度变形）→ INPUT_SIZE canvas
+            const { canvas, origSize } = cropSquareToCanvas(video);
+
+            // 2. 推理（INPUT_SIZE）
+            const imgData = canvas.getContext('2d').getImageData(0, 0, INPUT_SIZE, INPUT_SIZE);
+            const depth = await inferDepth(imgData);
+
+            // 3. OpenCV 等高线叠加（1:1 复刻电脑端）
+            const p = getUIRenderParams();
+            const resultBgr = generateContoursOverlayCV(canvas, depth, p.numContours, p.textScale, p.textAlpha);
+
+            // 4. 渲染到目标：保持视频原始显示的正方形区域
+            const vw = video.videoWidth;
+            const vh = video.videoHeight;
+            const dispSide = Math.min(vw, vh);
+            renderCVMat(resultBgr, targetCanvas, dispSide, dispSide);
+
+            // 5. 清理
+            deleteMat(resultBgr);
+        }
+    } catch (err) {
+        console.error('处理失败:', err);
+        document.getElementById('status').textContent = '处理异常: ' + (err.message || err);
+    }
+
+    processing = false;
+    requestAnimationFrame(processCameraLoop);
+}
+
+// ===================== 上传图片流程 =====================
+document.getElementById('file-input').addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (!cvReady || !session) {
+        document.getElementById('status').textContent = '模型尚未加载完成，请稍候';
+        return;
+    }
+
+    document.getElementById('status').textContent = '正在处理...';
+    const img = new Image();
+    img.onload = async () => {
+        try {
+            // 正方形裁剪
+            const { canvas } = cropSquareToCanvas(img);
+
+            const imgData = canvas.getContext('2d').getImageData(0, 0, INPUT_SIZE, INPUT_SIZE);
+            const depth = await inferDepth(imgData);
+
+            const p = getUIRenderParams();
+            const resultBgr = generateContoursOverlayCV(canvas, depth, p.numContours, p.textScale, p.textAlpha);
+
+            // 渲染：按原图正方形边长显示
+            const dispSide = Math.min(img.width, img.height);
+            const resultBox = document.getElementById('upload-result');
+            const outCanvas = document.getElementById('canvas-upload');
+            resultBox.style.display = 'block';
+            renderCVMat(resultBgr, outCanvas, dispSide, dispSide);
+            deleteMat(resultBgr);
+
+            document.getElementById('status').textContent =
+                `处理完成（等高线数=${p.numContours}, 文字大小=${p.textScale.toFixed(2)}, 透明度=${p.textAlpha}）`;
+        } catch (err) {
+            console.error(err);
+            document.getElementById('status').textContent = '处理失败: ' + (err.message || err);
+        }
+    };
+    img.src = URL.createObjectURL(file);
+});
+
+// ===================== UI 事件 =====================
+function switchTab(tab) {
+    currentTab = tab;
+    document.getElementById('panel-camera').style.display = tab === 'camera' ? 'block' : 'none';
+    document.getElementById('panel-upload').style.display = tab === 'upload' ? 'block' : 'none';
+    document.getElementById('tab-camera').classList.toggle('active', tab === 'camera');
+    document.getElementById('tab-upload').classList.toggle('active', tab === 'upload');
+    if (tab !== 'camera') stopCamera();
+}
+</script>
+</body>
+</html>
