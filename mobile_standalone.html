@@ -165,12 +165,13 @@ const INPUT_SIZE = 252;          // 18 * 14，与 ONNX 导出一致
 const MEAN = [0.485, 0.456, 0.406];
 const STD  = [0.229, 0.224, 0.225];
 
-// 模型 CDN 回退地址（部署到 GitHub Pages / Hugging Face 后填入）
-// 优先尝试本地相对路径，全部失败后尝试 CDN
+// 模型加载地址列表（按优先级依次尝试）
+// GitHub Pages 对大 .onnx 文件 MIME 处理可能异常，优先用 raw.githubusercontent.com
 const MODEL_CDN_URLS = [
-    // ===== 在此处填入你的 CDN 地址 =====
-    // 'https://your-username.github.io/depth-models/depth_anything_v2_vits_mobile_int8.onnx',
-    // 'https://huggingface.co/your-username/depth-models/resolve/main/depth_anything_v2_vits_mobile_int8.onnx',
+    'https://raw.githubusercontent.com/AkiAki-7230/depth-mobile/master/depth_anything_v2_vits_mobile_int8.onnx',
+    'https://akiaki-7230.github.io/depth-mobile/depth_anything_v2_vits_mobile_int8.onnx',
+    'https://raw.githubusercontent.com/AkiAki-7230/depth-mobile/master/depth_anything_v2_vits_mobile.onnx',
+    'https://akiaki-7230.github.io/depth-mobile/depth_anything_v2_vits_mobile.onnx',
 ];
 
 let session = null;

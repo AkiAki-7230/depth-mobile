@@ -11,7 +11,9 @@ const ASSETS = [
 ];
 
 // 模型文件（可能较大，单独缓存）
+// 同时缓存 GitHub raw 和 Pages 地址，确保至少一个可用
 const MODEL_FILES = [
+    'https://raw.githubusercontent.com/AkiAki-7230/depth-mobile/master/depth_anything_v2_vits_mobile_int8.onnx',
     './depth_anything_v2_vits_mobile_int8.onnx',
     './depth_anything_v2_vits_mobile.onnx',
 ];
