@@ -233,13 +233,16 @@ async function loadModel() {
     const loadingText = document.getElementById('loading-text');
 
     try {
-        // 所有候选地址：CDN 优先（GitHub Pages 对大文件可能 404），本地兜底
+        // 模型加载地址列表（按优先级依次尝试）
         const allPaths = [
-            // GitHub raw（CORS 支持，最可靠）
+            // jsDelivr CDN（全球加速 + 完美 CORS 支持，专为 GitHub 文件设计）
+            'https://cdn.jsdelivr.net/gh/AkiAki-7230/depth-mobile@master/depth_anything_v2_vits_mobile_int8.onnx',
+            // GitHub raw
             'https://raw.githubusercontent.com/AkiAki-7230/depth-mobile/master/depth_anything_v2_vits_mobile_int8.onnx',
             // GitHub Pages 同目录
             './depth_anything_v2_vits_mobile_int8.onnx',
             // 非量化版本
+            'https://cdn.jsdelivr.net/gh/AkiAki-7230/depth-mobile@master/depth_anything_v2_vits_mobile.onnx',
             'https://raw.githubusercontent.com/AkiAki-7230/depth-mobile/master/depth_anything_v2_vits_mobile.onnx',
             './depth_anything_v2_vits_mobile.onnx',
         ];
@@ -249,28 +252,39 @@ async function loadModel() {
         for (const path of allPaths) {
             try {
                 loadingText.textContent = `加载模型: ${path.split('/').pop()} ...`;
-                console.log('Trying model path:', path);
+                console.log('Trying:', path);
 
-                const resp = await fetch(path);
-                if (!resp.ok) {
-                    lastError = `HTTP ${resp.status} @ ${path}`;
-                    console.log('HTTP', resp.status, path);
-                    continue;
-                }
-                const buf = await resp.arrayBuffer();
-                console.log('Downloaded', buf.byteLength, 'bytes from', path);
+                // 用 XMLHttpRequest 代替 fetch（移动端兼容性更好，大文件更稳定）
+                const buf = await new Promise((resolve, reject) => {
+                    const xhr = new XMLHttpRequest();
+                    xhr.open('GET', path, true);
+                    xhr.responseType = 'arraybuffer';
+                    xhr.onload = () => {
+                        if (xhr.status >= 200 && xhr.status < 300) {
+                            resolve(xhr.response);
+                        } else {
+                            reject(new Error(`HTTP ${xhr.status}`));
+                        }
+                    };
+                    xhr.onerror = () => reject(new Error('Network error'));
+                    xhr.ontimeout = () => reject(new Error('Timeout'));
+                    xhr.timeout = 120000;  // 2分钟超时
+                    xhr.send();
+                });
+
+                console.log('Downloaded', buf.byteLength, 'bytes');
 
                 const modelData = new Uint8Array(buf);
                 session = await ort.InferenceSession.create(modelData, {
                     executionProviders: ['wasm', 'webgl'],
                     graphOptimizationLevel: 'all',
                 });
-                console.log('Model loaded successfully:', path);
+                console.log('Model loaded OK:', path);
                 loaded = true;
                 break;
             } catch (e) {
-                lastError = e.message;
-                console.log('Model load error:', path, e.message);
+                lastError = `${e.message} @ ${path}`;
+                console.log('Failed:', lastError);
             }
         }
 
