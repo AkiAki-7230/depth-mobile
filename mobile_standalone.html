@@ -165,15 +165,6 @@ const INPUT_SIZE = 252;          // 18 * 14，与 ONNX 导出一致
 const MEAN = [0.485, 0.456, 0.406];
 const STD  = [0.229, 0.224, 0.225];
 
-// 模型加载地址列表（按优先级依次尝试）
-// GitHub Pages 对大 .onnx 文件 MIME 处理可能异常，优先用 raw.githubusercontent.com
-const MODEL_CDN_URLS = [
-    'https://raw.githubusercontent.com/AkiAki-7230/depth-mobile/master/depth_anything_v2_vits_mobile_int8.onnx',
-    'https://akiaki-7230.github.io/depth-mobile/depth_anything_v2_vits_mobile_int8.onnx',
-    'https://raw.githubusercontent.com/AkiAki-7230/depth-mobile/master/depth_anything_v2_vits_mobile.onnx',
-    'https://akiaki-7230.github.io/depth-mobile/depth_anything_v2_vits_mobile.onnx',
-];
-
 let session = null;
 let cvReady = false;
 let streaming = false;
@@ -242,12 +233,16 @@ async function loadModel() {
     const loadingText = document.getElementById('loading-text');
 
     try {
-        // 所有候选地址（本地 + CDN）
-        const localPaths = [
-            'depth_anything_v2_vits_mobile_int8.onnx',
-            'depth_anything_v2_vits_mobile.onnx',
+        // 所有候选地址：CDN 优先（GitHub Pages 对大文件可能 404），本地兜底
+        const allPaths = [
+            // GitHub raw（CORS 支持，最可靠）
+            'https://raw.githubusercontent.com/AkiAki-7230/depth-mobile/master/depth_anything_v2_vits_mobile_int8.onnx',
+            // GitHub Pages 同目录
+            './depth_anything_v2_vits_mobile_int8.onnx',
+            // 非量化版本
+            'https://raw.githubusercontent.com/AkiAki-7230/depth-mobile/master/depth_anything_v2_vits_mobile.onnx',
+            './depth_anything_v2_vits_mobile.onnx',
         ];
-        const allPaths = localPaths.concat(MODEL_CDN_URLS);
 
         let loaded = false;
         let lastError = '';
@@ -256,17 +251,15 @@ async function loadModel() {
                 loadingText.textContent = `加载模型: ${path.split('/').pop()} ...`;
                 console.log('Trying model path:', path);
 
-                // 用 fetch 下载为 ArrayBuffer，再转 Uint8Array 交给 ORT
                 const resp = await fetch(path);
                 if (!resp.ok) {
-                    lastError = `HTTP ${resp.status}`;
+                    lastError = `HTTP ${resp.status} @ ${path}`;
                     console.log('HTTP', resp.status, path);
                     continue;
                 }
                 const buf = await resp.arrayBuffer();
                 console.log('Downloaded', buf.byteLength, 'bytes from', path);
 
-                // 用 Uint8Array 传给 ORT（比 ArrayBuffer 兼容性更好）
                 const modelData = new Uint8Array(buf);
                 session = await ort.InferenceSession.create(modelData, {
                     executionProviders: ['wasm', 'webgl'],
@@ -282,7 +275,7 @@ async function loadModel() {
         }
 
         if (!loaded) {
-            throw new Error('模型加载失败: ' + lastError);
+            throw new Error(lastError);
         }
 
         overlay.style.display = 'none';
